@@ -1,0 +1,128 @@
+wsl --install 
+wsl.exe --list --online  #列出可用的分发
+
+wsl --install -d Ubuntu-22.04  #进行安装
+
+https://hgwdev.gi.ucsc.edu/~kent/src/下载blatSrc35.zip
+cp /mnt/e/2026/blatSrc35.zip ./  #复制到linux下创建的blast文件夹
+unzip blatSrc35.zip 
+cd blatSrc 进入blatSrc文件夹下(此后直到设置环境变量，都在blatSrc文件夹下操作)
+uname -a  查看linux系统类型，我的系统是x86_64 GUN/LINUX;
+export MACHTYPE=x86_64 回车；
+mkdir -p ~/bin/x86_64 回车；
+make
+
+设置环境变量：主目录下vim .bashrc
+
+按”i”，编辑文档，最后行输入：export PATH=/home/2188/bin/x86_64:$PATH，编辑完成后Esc，：，wq，回车；(如果输入export PATH=/home/2188/bin:$PATH，运行时不能成功，还需加./blat才能运行)
+
+source .bashrc更新环境变量
+
+#转换fa文件为2bit文件
+#将genome.fa上传到创建的~/genomes/文件夹下
+cp /mnt/e/2026/AP/ncbi_dataset/ncbi_dataset/data/GCF_009805555.1/GCF_009805555.1_ASM980555v1_genomic.fna ./AP_555_genome.fna
+
+ /home/jiangli/bin/x86_64/faToTwoBit     ~/genomes/AP_555_genome.fna     ~/genomes/twoBite/AP_555_g
+enome.2bit
+
+mkdir -p ~/blat_server
+cp myBlat.py ~/blat_server/
+
+修改脚本配置
+需要修改三处：
+
+
+# ① 参考基因组路径（改成你的实际路径）
+ref_dict = {
+    "ref_name1": "/home/jiangli/genomes/twoBit/AP_555_genome.2bit",  # 或 .2bit 文件
+    # 如果只有一个物种，ref_name2 可以重复填同一个路径
+    "ref_name2": "/home/jiangli/genomes/twoBit/AP_555_genome.2bit"
+}
+
+# ② 物种关键词匹配（db 参数来自 IGV 传入的基因组名）
+def query_seq_db(db):
+    db = db.lower()
+    if "ap_555" in db:          # ← 改成你基因组名里的关键词
+        return ref_dict["ref_name1"]
+    else:
+        return ref_dict["ref_name1"]
+
+# ③ blat 可执行文件路径
+blat = "/home/jiangli/bin/x86_64/blat"  # ← 改成你的实际路径
+
+
+保存后退回目录
+创建虚拟环境（在 blat_server 目录下）
+cd ~/blat_server
+python3 -m venv venv
+source venv/bin/activate
+pip install flask
+
+# 第四步：启动服务
+python myBlat.py
+
+以后每次启动服务的命令
+cd ~/blat_server
+source venv/bin/activate
+python myBlat.py
+
+正常启动应显示：
+* Running on http://0.0.0.0:5000
+ * Press CTRL+C to quit
+ 如果没有显示这个，说明脚本启动失败。检查脚本末尾是否有启动入口
+ tail -10 ~/blat_server/myBlat.py
+ 
+ cat >> ~/blat_server/myBlat.py << 'EOF'
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
+EOF
+
+# 新开一个终端测试
+curl "http://localhost:5000/myBlat?userSeq=ATCGATCG&db=AP_555&output=json&type=DNA"
+返回结果则说明成功
+
+#设置开机启动
+cat >> ~/.bashrc << 'EOF'
+
+# 自动启动 BLAT Flask 服务
+if ! ss -tlnp | grep -q 5000; then
+    cd ~/blat_server && source venv/bin/activate
+    python myBlat.py > ~/blat_server/server.log 2>&1 &
+    echo "BLAT server started on port 5000"
+fi
+EOF
+
+
+
+配置 IGV 连接本地 BLAT 服务
+IGV 中的设置
+
+菜单栏 → View → Preferences → Advanced
+找到 BLAT URL，填入：http://172.31.105.41:5000/myBlat  
+# WSL IP 就是刚才 Flask 启动时python ~/blat_server/myBlat.py 显示的 172.31.105.41
+
+#注意： WSL 的 IP（172.31.105.41）在重启 Windows 后可能会变化。如果 IGV 突然连不上，在 WSL 里运行 hostname -I 重新获取 IP，并在 IGV 设置里更新即可。
+
+#首次使用需建立索引
+sudo apt install samtools
+samtools faidx ~/genomes/AP_555_genome.fna
+步骤菜单路径说明加载基因组
+Genomes → Load Genome from File选 .fna 文件加载注释File → Load from File选 .gff/.gtf
+
+
+如果报错405 表示请求方法不对。IGV 发送的是 POST 请求，但脚本只允许 GET。
+# 修改路由，同时支持 GET 和 POST
+sed -i "s/methods=\['GET'\]/methods=['GET', 'POST']/" ~/blat_server/myBlat.py
+
+# 验证修改
+grep "methods" ~/blat_server/myBlat.py
+#应看到
+@app.route("/myBlat", methods=['GET', 'POST'])
+#重启服务
+# 杀掉旧进程
+kill $(lsof -ti:5000)
+
+# 重新启动
+cd ~/blat_server && source venv/bin/activate
+python myBlat.py &
